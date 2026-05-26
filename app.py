@@ -30,10 +30,7 @@ def safe_display(df, max_rows=5000):
         return
 
     safe_df = df.head(max_rows).copy()
-
-    for col in safe_df.columns:
-        safe_df[col] = safe_df[col].astype(str)
-
+    safe_df = safe_df.fillna("").astype(str)
     st.dataframe(safe_df, use_container_width=True)
 
     if len(df) > max_rows:
@@ -53,10 +50,8 @@ def read_file(file):
 def normalize_value(value):
     if pd.isna(value):
         return ""
-
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
-
     return str(value).strip()
 
 
@@ -74,11 +69,9 @@ def build_key(row):
         return None
 
     values = []
-
     for field in KEY_CONFIG[indicator]:
         if field not in row.index:
             return None
-
         values.append(normalize_value(row[field]))
 
     if "" in values:
@@ -90,7 +83,6 @@ def build_key(row):
 def to_number(value):
     if pd.isna(value) or value == "":
         return None
-
     try:
         return float(str(value).replace(",", "."))
     except Exception:
@@ -140,7 +132,6 @@ def compare_files(df1, df2, tolerance):
 
     if valid1.empty:
         valid1 = pd.DataFrame(columns=["CLAVE_COMPARACION"])
-
     if valid2.empty:
         valid2 = pd.DataFrame(columns=["CLAVE_COMPARACION"])
 
@@ -187,14 +178,14 @@ def compare_files(df1, df2, tolerance):
                     "CAMPO": field,
                     "VALOR_SCI_1_0": str(original_value_1),
                     "VALOR_SCI_2_0": str(original_value_2),
-                    "DIFERENCIA_ABSOLUTA": "",
-                    "DIFERENCIA_PORCENTUAL": "",
+                    "DIFERENCIA_ABSOLUTA": "N/A",
+                    "DIFERENCIA_PORCENTUAL": "N/A",
                     "ESTADO": "NO NUMERICO O VACIO"
                 })
                 continue
 
             absolute_difference = abs(value_1 - value_2)
-            percentage_difference = "" if value_1 == 0 else (absolute_difference / abs(value_1)) * 100
+            percentage_difference = "N/A" if value_1 == 0 else (absolute_difference / abs(value_1)) * 100
 
             if absolute_difference > tolerance:
                 value_differences.append({
@@ -213,18 +204,8 @@ def compare_files(df1, df2, tolerance):
     if "ID_INDICADOR" in df1.columns and "ID_INDICADOR" in df2.columns:
         count_1 = df1.groupby("ID_INDICADOR").size().reset_index(name="SCI_1_0")
         count_2 = df2.groupby("ID_INDICADOR").size().reset_index(name="SCI_2_0")
-
-        count_by_indicator = pd.merge(
-            count_1,
-            count_2,
-            on="ID_INDICADOR",
-            how="outer"
-        ).fillna(0)
-
-        count_by_indicator["DIFERENCIA"] = (
-            count_by_indicator["SCI_2_0"]
-            - count_by_indicator["SCI_1_0"]
-        )
+        count_by_indicator = pd.merge(count_1, count_2, on="ID_INDICADOR", how="outer").fillna(0)
+        count_by_indicator["DIFERENCIA"] = count_by_indicator["SCI_2_0"] - count_by_indicator["SCI_1_0"]
     else:
         count_by_indicator = pd.DataFrame()
 
@@ -270,17 +251,13 @@ def create_excel(results):
         for sheet_name, df in results.items():
             if isinstance(df, pd.DataFrame) and not df.empty:
                 export_df = df.copy()
-
                 for col in export_df.columns:
                     if export_df[col].dtype == "object":
                         export_df[col] = export_df[col].astype(str)
-
                 export_df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
             else:
                 pd.DataFrame([{"RESULTADO": "Sin registros"}]).to_excel(
-                    writer,
-                    sheet_name=sheet_name[:31],
-                    index=False
+                    writer, sheet_name=sheet_name[:31], index=False
                 )
 
     return output.getvalue()
@@ -296,17 +273,8 @@ with st.sidebar:
         format="%.6f"
     )
 
-file_v1 = st.file_uploader(
-    "Subir archivo SCI Automático 1.0",
-    type=["xlsx", "csv"],
-    key="v1"
-)
-
-file_v2 = st.file_uploader(
-    "Subir archivo SCI Automático 2.0",
-    type=["xlsx", "csv"],
-    key="v2"
-)
+file_v1 = st.file_uploader("Subir archivo SCI Automático 1.0", type=["xlsx", "csv"], key="v1")
+file_v2 = st.file_uploader("Subir archivo SCI Automático 2.0", type=["xlsx", "csv"], key="v2")
 
 if file_v1 and file_v2:
     with st.spinner("Procesando comparación..."):
@@ -330,13 +298,11 @@ if file_v1 and file_v2:
     col6.metric("Solo SCI 2.0", summary_dict["Registros solo en SCI 2.0"])
     col7.metric(
         "Filas duplicadas",
-        summary_dict["Filas con clave duplicada SCI 1.0"]
-        + summary_dict["Filas con clave duplicada SCI 2.0"]
+        summary_dict["Filas con clave duplicada SCI 1.0"] + summary_dict["Filas con clave duplicada SCI 2.0"]
     )
     col8.metric(
         "Claves inválidas",
-        summary_dict["Claves inválidas SCI 1.0"]
-        + summary_dict["Claves inválidas SCI 2.0"]
+        summary_dict["Claves inválidas SCI 1.0"] + summary_dict["Claves inválidas SCI 2.0"]
     )
 
     st.caption(
@@ -382,13 +348,11 @@ if file_v1 and file_v2:
     with tabs[4]:
         st.subheader("Registros solo en SCI 1.0")
         safe_display(results["Solo_SCI_1_0"])
-
         st.subheader("Registros solo en SCI 2.0")
         safe_display(results["Solo_SCI_2_0"])
 
     with tabs[5]:
         st.subheader("Diferencias en PROPORCION / TAMANIO_DE_MUESTRA")
-
         if results["Diferencias_valores"].empty:
             st.success("No se detectaron diferencias en PROPORCION / TAMANIO_DE_MUESTRA.")
         else:
@@ -397,13 +361,10 @@ if file_v1 and file_v2:
     with tabs[6]:
         st.subheader("Duplicados SCI 1.0")
         safe_display(results["Duplicados_SCI_1_0"])
-
         st.subheader("Duplicados SCI 2.0")
         safe_display(results["Duplicados_SCI_2_0"])
-
         st.subheader("Claves inválidas SCI 1.0")
         safe_display(results["Claves_invalidas_1_0"])
-
         st.subheader("Claves inválidas SCI 2.0")
         safe_display(results["Claves_invalidas_2_0"])
 
