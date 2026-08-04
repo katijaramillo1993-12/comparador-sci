@@ -26,7 +26,7 @@ VALUE_CONFIG = {
 COLUMNAS_OBLIGATORIAS_2_0 = [
     "ID_PROCESO", "ID_INDICADOR", "ID_FLOTA", "COD_PESQUERIA", "COD_ESPECIE",
     "MES", "ANIO", "ID_ZONA", "SERIE", "PROPORCION", "LONGITUD",
-    "TAMANIO_DE_MUESTRA", "ID_ESCALA", "FECHA_GENERACION"
+    "TAMANIO_DE_MUESTRA", "ID_ESCALA", "FECHA_GENERACION", "USUARIO"
 ]
 
 
@@ -106,21 +106,39 @@ def round_decimal(value, decimal_places):
     return number.quantize(quantizer, rounding=ROUND_HALF_UP)
 
 
-def values_are_equal(value_1, value_2, decimal_places):
+def values_are_equal(
+    value_1,
+    value_2,
+    comparison_method,
+    decimal_places,
+    tolerance,
+):
     """
-    Compara FoxPro y SCI 2.0 después de redondear ambos valores
-    a la cantidad de decimales seleccionada.
-    """
-    rounded_1 = round_decimal(value_1, decimal_places)
-    rounded_2 = round_decimal(value_2, decimal_places)
+    Compara los valores usando el método seleccionado:
 
-    if rounded_1 is None and rounded_2 is None:
+    1. Redondeo por decimales:
+       ambos valores se redondean y luego se comparan.
+
+    2. Tolerancia absoluta:
+       se consideran iguales cuando la diferencia absoluta
+       es menor o igual a la tolerancia configurada.
+    """
+    number_1 = to_decimal(value_1)
+    number_2 = to_decimal(value_2)
+
+    if number_1 is None and number_2 is None:
         return normalize_value(value_1) == normalize_value(value_2)
 
-    if rounded_1 is None or rounded_2 is None:
+    if number_1 is None or number_2 is None:
         return False
 
-    return rounded_1 == rounded_2
+    if comparison_method == "Redondeo por cantidad de decimales":
+        rounded_1 = round_decimal(value_1, decimal_places)
+        rounded_2 = round_decimal(value_2, decimal_places)
+        return rounded_1 == rounded_2
+
+    tolerance_decimal = Decimal(str(tolerance))
+    return abs(number_1 - number_2) <= tolerance_decimal
 
 
 def get_difference(value_1, value_2):
@@ -315,7 +333,7 @@ def generar_validacion_2_0(df):
 # =========================================================
 # MODO COMPARAR SCI 1.0 VS SCI 2.0
 # =========================================================
-def compare_files(df1, df2, decimal_places):
+def compare_files(df1, df2, comparison_method, decimal_places, tolerance):
     columns_v1 = set(df1.columns)
     columns_v2 = set(df2.columns)
     structure = pd.DataFrame([
@@ -363,7 +381,13 @@ def compare_files(df1, df2, decimal_places):
             original_value_1 = row.get(col1)
             original_value_2 = row.get(col2)
             compared_fields += 1
-            if values_are_equal(original_value_1, original_value_2, decimal_places):
+            if values_are_equal(
+                original_value_1,
+                original_value_2,
+                comparison_method,
+                decimal_places,
+                tolerance,
+            ):
                 equal_fields += 1
                 continue
             absolute_difference, percentage_difference = get_difference(original_value_1, original_value_2)
@@ -383,7 +407,17 @@ def compare_files(df1, df2, decimal_places):
                 "VALOR_SCI_2_0_REDONDEADO": str(
                     round_decimal(original_value_2, decimal_places)
                 ),
-                "DECIMALES_CONSIDERADOS": decimal_places,
+                "METODO_COMPARACION": comparison_method,
+                "DECIMALES_CONSIDERADOS": (
+                    decimal_places
+                    if comparison_method == "Redondeo por cantidad de decimales"
+                    else "No aplica"
+                ),
+                "TOLERANCIA_APLICADA": (
+                    tolerance
+                    if comparison_method == "Tolerancia absoluta"
+                    else "No aplica"
+                ),
                 "DIFERENCIA_ABSOLUTA_ORIGINAL": absolute_difference,
                 "DIFERENCIA_PORCENTUAL_ORIGINAL": percentage_difference,
                 "ESTADO": "DIFERENCIA"
@@ -418,6 +452,115 @@ def compare_files(df1, df2, decimal_places):
 
     value_differences_df = pd.DataFrame(value_differences)
     matched_value_summary_df = pd.DataFrame(matched_value_summary)
+
+    # =====================================================
+    # Resumen consolidado por ID_INDICADOR
+    # =====================================================
+    consolidated_rows = []
+
+    for indicator in sorted(VALUE_CONFIG.keys()):
+        indicator_summary = matched_value_summary_df[
+            matched_value_summary_df["ID_INDICADOR"] == indicator
+        ].copy()
+
+        compared_records = len(indicator_summary)
+
+        # PROPORCION aplica para los indicadores 3, 4, 5, 6 y 7.
+        if "PROPORCION" in VALUE_CONFIG.get(indicator, []):
+            proportion_differences = int(
+                (indicator_summary["DIFERENCIA_PROPORCION"] == "SI").sum()
+            )
+            proportion_matches = compared_records - proportion_differences
+            proportion_match_pct = (
+                (proportion_matches / compared_records) * 100
+                if compared_records > 0 else 0
+            )
+            proportion_diff_pct = (
+                (proportion_differences / compared_records) * 100
+                if compared_records > 0 else 0
+            )
+        else:
+            proportion_matches = "N/A"
+            proportion_match_pct = "N/A"
+            proportion_differences = "N/A"
+            proportion_diff_pct = "N/A"
+
+        # TAMANIO_DE_MUESTRA solo aplica para 4, 5 y 6.
+        if "TAMANIO_DE_MUESTRA" in VALUE_CONFIG.get(indicator, []):
+            sample_differences = int(
+                (indicator_summary["DIFERENCIA_TAMANIO_DE_MUESTRA"] == "SI").sum()
+            )
+            sample_matches = compared_records - sample_differences
+            sample_match_pct = (
+                (sample_matches / compared_records) * 100
+                if compared_records > 0 else 0
+            )
+            sample_diff_pct = (
+                (sample_differences / compared_records) * 100
+                if compared_records > 0 else 0
+            )
+        else:
+            sample_matches = "N/A"
+            sample_match_pct = "N/A"
+            sample_differences = "N/A"
+            sample_diff_pct = "N/A"
+
+        consolidated_rows.append({
+            "ID_INDICADOR": indicator,
+            "REGISTROS_COMPARADOS": compared_records,
+            "PROPORCION_COINCIDENCIAS": proportion_matches,
+            "PROPORCION_%_COINCIDENCIA": proportion_match_pct,
+            "PROPORCION_DIFERENCIAS": proportion_differences,
+            "PROPORCION_%_DIFERENCIA": proportion_diff_pct,
+            "TAMANIO_MUESTRA_COINCIDENCIAS": sample_matches,
+            "TAMANIO_MUESTRA_%_COINCIDENCIA": sample_match_pct,
+            "TAMANIO_MUESTRA_DIFERENCIAS": sample_differences,
+            "TAMANIO_MUESTRA_%_DIFERENCIA": sample_diff_pct,
+        })
+
+    # Totales de PROPORCION sobre todas las claves con match.
+    total_compared = len(matched_value_summary_df)
+    total_proportion_differences = int(
+        (matched_value_summary_df["DIFERENCIA_PROPORCION"] == "SI").sum()
+    )
+    total_proportion_matches = total_compared - total_proportion_differences
+
+    # Totales de TAMANIO_DE_MUESTRA solo sobre indicadores 4, 5 y 6.
+    sample_applicable = matched_value_summary_df[
+        matched_value_summary_df["ID_INDICADOR"].isin([4, 5, 6])
+    ]
+    total_sample_compared = len(sample_applicable)
+    total_sample_differences = int(
+        (sample_applicable["DIFERENCIA_TAMANIO_DE_MUESTRA"] == "SI").sum()
+    )
+    total_sample_matches = total_sample_compared - total_sample_differences
+
+    consolidated_rows.append({
+        "ID_INDICADOR": "TOTAL",
+        "REGISTROS_COMPARADOS": total_compared,
+        "PROPORCION_COINCIDENCIAS": total_proportion_matches,
+        "PROPORCION_%_COINCIDENCIA": (
+            (total_proportion_matches / total_compared) * 100
+            if total_compared > 0 else 0
+        ),
+        "PROPORCION_DIFERENCIAS": total_proportion_differences,
+        "PROPORCION_%_DIFERENCIA": (
+            (total_proportion_differences / total_compared) * 100
+            if total_compared > 0 else 0
+        ),
+        "TAMANIO_MUESTRA_COINCIDENCIAS": total_sample_matches,
+        "TAMANIO_MUESTRA_%_COINCIDENCIA": (
+            (total_sample_matches / total_sample_compared) * 100
+            if total_sample_compared > 0 else 0
+        ),
+        "TAMANIO_MUESTRA_DIFERENCIAS": total_sample_differences,
+        "TAMANIO_MUESTRA_%_DIFERENCIA": (
+            (total_sample_differences / total_sample_compared) * 100
+            if total_sample_compared > 0 else 0
+        ),
+    })
+
+    consolidated_by_indicator = pd.DataFrame(consolidated_rows)
 
     if "ID_INDICADOR" in df1.columns and "ID_INDICADOR" in df2.columns:
         count_1 = df1.groupby("ID_INDICADOR").size().reset_index(name="SCI_1_0")
@@ -460,14 +603,31 @@ def compare_files(df1, df2, decimal_places):
     ])
     comparison_configuration = pd.DataFrame([
         {
-            "PARAMETRO": "Cantidad de decimales considerados",
-            "VALOR": decimal_places
+            "PARAMETRO": "Método de comparación",
+            "VALOR": comparison_method
+        },
+        {
+            "PARAMETRO": "Cantidad de decimales",
+            "VALOR": (
+                decimal_places
+                if comparison_method == "Redondeo por cantidad de decimales"
+                else "No aplica"
+            )
+        },
+        {
+            "PARAMETRO": "Tolerancia absoluta",
+            "VALOR": (
+                tolerance
+                if comparison_method == "Tolerancia absoluta"
+                else "No aplica"
+            )
         },
         {
             "PARAMETRO": "Criterio aplicado",
             "VALOR": (
-                "FoxPro y SCI 2.0 se redondean antes de comparar. "
-                "Los valores redondeados deben ser exactamente iguales."
+                "Los valores se redondean antes de comparar."
+                if comparison_method == "Redondeo por cantidad de decimales"
+                else "Los valores coinciden cuando la diferencia absoluta es menor o igual a la tolerancia."
             )
         }
     ])
@@ -475,6 +635,7 @@ def compare_files(df1, df2, decimal_places):
     return {
         "Configuracion_comparacion": comparison_configuration,
         "Resumen": summary,
+        "Resumen_por_ID_INDICADOR": consolidated_by_indicator,
         "Estructura": structure,
         "Conteo_ID_INDICADOR": count_by_indicator,
         "Match_por_clave": matched,
@@ -496,15 +657,41 @@ def compare_files(df1, df2, decimal_places):
 with st.sidebar:
     st.header("Configuración")
     modo = st.radio("Modo de trabajo", ["Validar archivo SCI 2.0", "Comparar SCI 1.0 vs SCI 2.0"])
+    comparison_method = st.selectbox(
+        "Método de comparación para el punto 4",
+        [
+            "Redondeo por cantidad de decimales",
+            "Tolerancia absoluta",
+        ],
+        help=(
+            "Selecciona si deseas comparar los valores redondeados "
+            "o utilizando una tolerancia absoluta."
+        )
+    )
+
     decimal_places = st.number_input(
         "Cantidad de decimales para comparar valores",
         min_value=0,
         max_value=10,
         value=1,
         step=1,
+        disabled=comparison_method != "Redondeo por cantidad de decimales",
         help=(
-            "En el punto 4, los valores de PROPORCION y TAMANIO_DE_MUESTRA "
-            "se redondean a esta cantidad de decimales antes de comparar."
+            "Los valores de PROPORCION y TAMANIO_DE_MUESTRA se redondean "
+            "a esta cantidad de decimales antes de comparar."
+        )
+    )
+
+    tolerance = st.number_input(
+        "Nivel de tolerancia absoluta",
+        min_value=0.0,
+        value=0.0001,
+        step=0.0001,
+        format="%.6f",
+        disabled=comparison_method != "Tolerancia absoluta",
+        help=(
+            "Los valores se consideran coincidentes cuando su diferencia "
+            "absoluta es menor o igual a esta tolerancia."
         )
     )
 
@@ -569,15 +756,28 @@ elif modo == "Comparar SCI 1.0 vs SCI 2.0":
         with st.spinner("Procesando comparación..."):
             df1 = read_file(file_v1)
             df2 = read_file(file_v2)
-            results = compare_files(df1, df2, decimal_places)
+            results = compare_files(
+                df1,
+                df2,
+                comparison_method,
+                decimal_places,
+                tolerance,
+            )
         summary = results["Resumen"]
         summary_dict = dict(zip(summary["VALIDACION"], summary["RESULTADO"]))
         st.success("Comparación ejecutada correctamente")
-        st.info(
-            f"**Criterio del punto 4:** PROPORCION y TAMANIO_DE_MUESTRA "
-            f"se compararon redondeando FoxPro y SCI 2.0 a "
-            f"**{decimal_places} decimal(es)**."
-        )
+        if comparison_method == "Redondeo por cantidad de decimales":
+            st.info(
+                f"**Criterio del punto 4:** PROPORCION y TAMANIO_DE_MUESTRA "
+                f"se compararon redondeando FoxPro y SCI 2.0 a "
+                f"**{decimal_places} decimal(es)**."
+            )
+        else:
+            st.info(
+                f"**Criterio del punto 4:** PROPORCION y TAMANIO_DE_MUESTRA "
+                f"se compararon utilizando una tolerancia absoluta de "
+                f"**±{tolerance:.6f}**."
+            )
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Registros SCI 1.0", summary_dict["Total registros SCI 1.0"])
         col2.metric("Registros SCI 2.0", summary_dict["Total registros SCI 2.0"])
@@ -588,27 +788,60 @@ elif modo == "Comparar SCI 1.0 vs SCI 2.0":
         col6.metric("Solo SCI 1.0", summary_dict["Registros solo en SCI 1.0"])
         col7.metric("Solo SCI 2.0", summary_dict["Registros solo en SCI 2.0"])
         col8.metric("Filas duplicadas", summary_dict["Filas con clave duplicada SCI 1.0"] + summary_dict["Filas con clave duplicada SCI 2.0"])
-        st.caption(
-            f"Nota: 'Valores idénticos' considera las claves que hicieron match "
-            f"y cuyos valores resultaron iguales después de redondear ambos "
-            f"sistemas a {decimal_places} decimal(es)."
-        )
+        if comparison_method == "Redondeo por cantidad de decimales":
+            st.caption(
+                f"Nota: 'Valores idénticos' considera las claves que hicieron match "
+                f"y cuyos valores resultaron iguales después de redondear ambos "
+                f"sistemas a {decimal_places} decimal(es)."
+            )
+        else:
+            st.caption(
+                f"Nota: 'Valores idénticos' considera las claves que hicieron match "
+                f"y cuya diferencia absoluta fue menor o igual a {tolerance:.6f}."
+            )
         excel_report = create_excel(results)
         st.download_button("📥 Descargar reporte comparativo Excel", data=excel_report, file_name="Reporte_Comparativo_SCI_Automatico.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        tabs = st.tabs(["Resumen", "Estructura", "Conteo ID_INDICADOR", "Match por clave", "Resumen valores match", "Solo en un archivo", "Diferencias valores", "Duplicados / inválidos"])
+        tabs = st.tabs([
+            "Resumen",
+            "Resumen por ID_INDICADOR",
+            "Estructura",
+            "Conteo ID_INDICADOR",
+            "Match por clave",
+            "Resumen valores match",
+            "Solo en un archivo",
+            "Diferencias valores",
+            "Duplicados / inválidos"
+        ])
         with tabs[0]:
             st.subheader("Resumen general")
             safe_display(results["Resumen"])
+
         with tabs[1]:
+            st.subheader("Resumen consolidado por ID_INDICADOR")
+            st.write(
+                "La tabla resume las coincidencias y diferencias de PROPORCION "
+                "y TAMANIO_DE_MUESTRA para las claves que hicieron match."
+            )
+            safe_display(results["Resumen_por_ID_INDICADOR"])
+            st.caption(
+                "TAMANIO_DE_MUESTRA no aplica para los indicadores 3 y 7. "
+                "El total porcentual de este campo se calcula únicamente sobre "
+                "los indicadores 4, 5 y 6."
+            )
+
+        with tabs[2]:
             st.subheader("Validación de estructura")
             safe_display(results["Estructura"])
-        with tabs[2]:
+
+        with tabs[3]:
             st.subheader("Conteo por ID_INDICADOR")
             safe_display(results["Conteo_ID_INDICADOR"])
-        with tabs[3]:
+
+        with tabs[4]:
             st.subheader("Registros que coinciden por clave")
             safe_display(results["Match_por_clave"])
-        with tabs[4]:
+
+        with tabs[5]:
             st.subheader("Resumen de valores numéricos para claves con match")
             chart_df = results["Grafico_resumen_valores"]
             if chart_df.empty:
@@ -616,18 +849,18 @@ elif modo == "Comparar SCI 1.0 vs SCI 2.0":
             else:
                 st.bar_chart(chart_df.set_index("CATEGORIA")["CANTIDAD"])
             safe_display(results["Resumen_valores_match"])
-        with tabs[5]:
+        with tabs[6]:
             st.subheader("Registros solo en SCI 1.0")
             safe_display(results["Solo_SCI_1_0"])
             st.subheader("Registros solo en SCI 2.0")
             safe_display(results["Solo_SCI_2_0"])
-        with tabs[6]:
+        with tabs[7]:
             st.subheader("Diferencias en PROPORCION / TAMANIO_DE_MUESTRA")
             if results["Diferencias_valores"].empty:
                 st.success("No se detectaron diferencias en PROPORCION / TAMANIO_DE_MUESTRA.")
             else:
                 safe_display(results["Diferencias_valores"])
-        with tabs[7]:
+        with tabs[8]:
             st.subheader("Duplicados SCI 1.0")
             safe_display(results["Duplicados_SCI_1_0"])
             st.subheader("Duplicados SCI 2.0")
