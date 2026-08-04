@@ -114,14 +114,11 @@ def values_are_equal(
     tolerance,
 ):
     """
-    Compara los valores usando el método seleccionado:
+    Compara los valores según el método seleccionado:
 
-    1. Redondeo por decimales:
-       ambos valores se redondean y luego se comparan.
-
-    2. Tolerancia absoluta:
-       se consideran iguales cuando la diferencia absoluta
-       es menor o igual a la tolerancia configurada.
+    - Solo redondeo por cantidad de decimales.
+    - Solo tolerancia absoluta.
+    - Redondeo + tolerancia.
     """
     number_1 = to_decimal(value_1)
     number_2 = to_decimal(value_2)
@@ -132,14 +129,22 @@ def values_are_equal(
     if number_1 is None or number_2 is None:
         return False
 
-    if comparison_method == "Redondeo por cantidad de decimales":
+    tolerance_decimal = Decimal(str(tolerance))
+
+    if comparison_method == "Solo redondeo por cantidad de decimales":
         rounded_1 = round_decimal(value_1, decimal_places)
         rounded_2 = round_decimal(value_2, decimal_places)
         return rounded_1 == rounded_2
 
-    tolerance_decimal = Decimal(str(tolerance))
-    return abs(number_1 - number_2) <= tolerance_decimal
+    if comparison_method == "Solo tolerancia absoluta":
+        return abs(number_1 - number_2) <= tolerance_decimal
 
+    # Método combinado:
+    # primero se redondean ambos valores y luego se aplica la tolerancia.
+    rounded_1 = round_decimal(value_1, decimal_places)
+    rounded_2 = round_decimal(value_2, decimal_places)
+
+    return abs(rounded_1 - rounded_2) <= tolerance_decimal
 
 def get_difference(value_1, value_2):
     """Calcula la diferencia sobre los valores originales, sin redondear."""
@@ -410,12 +415,18 @@ def compare_files(df1, df2, comparison_method, decimal_places, tolerance):
                 "METODO_COMPARACION": comparison_method,
                 "DECIMALES_CONSIDERADOS": (
                     decimal_places
-                    if comparison_method == "Redondeo por cantidad de decimales"
+                    if comparison_method in [
+                        "Solo redondeo por cantidad de decimales",
+                        "Redondeo + tolerancia",
+                    ]
                     else "No aplica"
                 ),
                 "TOLERANCIA_APLICADA": (
                     tolerance
-                    if comparison_method == "Tolerancia absoluta"
+                    if comparison_method in [
+                        "Solo tolerancia absoluta",
+                        "Redondeo + tolerancia",
+                    ]
                     else "No aplica"
                 ),
                 "DIFERENCIA_ABSOLUTA_ORIGINAL": absolute_difference,
@@ -610,7 +621,10 @@ def compare_files(df1, df2, comparison_method, decimal_places, tolerance):
             "PARAMETRO": "Cantidad de decimales",
             "VALOR": (
                 decimal_places
-                if comparison_method == "Redondeo por cantidad de decimales"
+                if comparison_method in [
+                    "Solo redondeo por cantidad de decimales",
+                    "Redondeo + tolerancia",
+                ]
                 else "No aplica"
             )
         },
@@ -618,16 +632,26 @@ def compare_files(df1, df2, comparison_method, decimal_places, tolerance):
             "PARAMETRO": "Tolerancia absoluta",
             "VALOR": (
                 tolerance
-                if comparison_method == "Tolerancia absoluta"
+                if comparison_method in [
+                    "Solo tolerancia absoluta",
+                    "Redondeo + tolerancia",
+                ]
                 else "No aplica"
             )
         },
         {
             "PARAMETRO": "Criterio aplicado",
             "VALOR": (
-                "Los valores se redondean antes de comparar."
-                if comparison_method == "Redondeo por cantidad de decimales"
-                else "Los valores coinciden cuando la diferencia absoluta es menor o igual a la tolerancia."
+                "Los valores se redondean y deben ser exactamente iguales."
+                if comparison_method == "Solo redondeo por cantidad de decimales"
+                else (
+                    "Se comparan los valores originales aplicando tolerancia absoluta."
+                    if comparison_method == "Solo tolerancia absoluta"
+                    else (
+                        "Los valores se redondean primero y luego se aplica "
+                        "la tolerancia absoluta sobre los valores redondeados."
+                    )
+                )
             )
         }
     ])
@@ -660,12 +684,13 @@ with st.sidebar:
     comparison_method = st.selectbox(
         "Método de comparación para el punto 4",
         [
-            "Redondeo por cantidad de decimales",
-            "Tolerancia absoluta",
+            "Solo redondeo por cantidad de decimales",
+            "Solo tolerancia absoluta",
+            "Redondeo + tolerancia",
         ],
+        index=2,
         help=(
-            "Selecciona si deseas comparar los valores redondeados "
-            "o utilizando una tolerancia absoluta."
+            "Puedes aplicar solo redondeo, solo tolerancia o ambos criterios."
         )
     )
 
@@ -675,25 +700,55 @@ with st.sidebar:
         max_value=10,
         value=1,
         step=1,
-        disabled=comparison_method != "Redondeo por cantidad de decimales",
+        disabled=comparison_method == "Solo tolerancia absoluta",
         help=(
             "Los valores de PROPORCION y TAMANIO_DE_MUESTRA se redondean "
-            "a esta cantidad de decimales antes de comparar."
+            "a esta cantidad de decimales."
         )
     )
 
     tolerance = st.number_input(
         "Nivel de tolerancia absoluta",
         min_value=0.0,
-        value=0.0001,
-        step=0.0001,
+        value=0.1,
+        step=0.01,
         format="%.6f",
-        disabled=comparison_method != "Tolerancia absoluta",
+        disabled=comparison_method == "Solo redondeo por cantidad de decimales",
         help=(
-            "Los valores se consideran coincidentes cuando su diferencia "
-            "absoluta es menor o igual a esta tolerancia."
+            "Después del redondeo, o directamente sobre los valores originales, "
+            "se consideran coincidentes cuando la diferencia absoluta es menor "
+            "o igual a esta tolerancia."
         )
     )
+
+    with st.expander("Ver ejemplo del criterio combinado"):
+        example_df = pd.DataFrame([
+            {
+                "FoxPro": 0.142,
+                "SCI 2.0": 0.149,
+                "Decimales": 1,
+                "Resultado del redondeo": "0.1 vs 0.1",
+                "Tolerancia": 0.1,
+                "¿Coinciden?": "✅ Sí",
+            },
+            {
+                "FoxPro": 0.142,
+                "SCI 2.0": 0.151,
+                "Decimales": 1,
+                "Resultado del redondeo": "0.1 vs 0.2",
+                "Tolerancia": 0.1,
+                "¿Coinciden?": "✅ Sí (diferencia=0.1)",
+            },
+            {
+                "FoxPro": 0.142,
+                "SCI 2.0": 0.151,
+                "Decimales": 1,
+                "Resultado del redondeo": "0.1 vs 0.2",
+                "Tolerancia": 0.05,
+                "¿Coinciden?": "❌ No",
+            },
+        ])
+        st.dataframe(example_df, use_container_width=True, hide_index=True)
 
 if modo == "Validar archivo SCI 2.0":
     st.header("✅ Validación individual archivo SCI 2.0")
@@ -766,17 +821,24 @@ elif modo == "Comparar SCI 1.0 vs SCI 2.0":
         summary = results["Resumen"]
         summary_dict = dict(zip(summary["VALIDACION"], summary["RESULTADO"]))
         st.success("Comparación ejecutada correctamente")
-        if comparison_method == "Redondeo por cantidad de decimales":
+        if comparison_method == "Solo redondeo por cantidad de decimales":
             st.info(
-                f"**Criterio del punto 4:** PROPORCION y TAMANIO_DE_MUESTRA "
-                f"se compararon redondeando FoxPro y SCI 2.0 a "
-                f"**{decimal_places} decimal(es)**."
+                f"**Criterio del punto 4:** los valores de PROPORCION y "
+                f"TAMANIO_DE_MUESTRA se redondearon a **{decimal_places} "
+                f"decimal(es)** y se consideraron coincidentes cuando los "
+                f"valores redondeados fueron exactamente iguales."
+            )
+        elif comparison_method == "Solo tolerancia absoluta":
+            st.info(
+                f"**Criterio del punto 4:** se compararon los valores originales "
+                f"utilizando una tolerancia absoluta de **±{tolerance:.6f}**."
             )
         else:
             st.info(
-                f"**Criterio del punto 4:** PROPORCION y TAMANIO_DE_MUESTRA "
-                f"se compararon utilizando una tolerancia absoluta de "
-                f"**±{tolerance:.6f}**."
+                f"**Criterio del punto 4:** primero se redondearon los valores "
+                f"de FoxPro y SCI 2.0 a **{decimal_places} decimal(es)** y luego "
+                f"se aplicó una tolerancia absoluta de **±{tolerance:.6f}** "
+                f"sobre los valores redondeados."
             )
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Registros SCI 1.0", summary_dict["Total registros SCI 1.0"])
@@ -788,16 +850,24 @@ elif modo == "Comparar SCI 1.0 vs SCI 2.0":
         col6.metric("Solo SCI 1.0", summary_dict["Registros solo en SCI 1.0"])
         col7.metric("Solo SCI 2.0", summary_dict["Registros solo en SCI 2.0"])
         col8.metric("Filas duplicadas", summary_dict["Filas con clave duplicada SCI 1.0"] + summary_dict["Filas con clave duplicada SCI 2.0"])
-        if comparison_method == "Redondeo por cantidad de decimales":
+        if comparison_method == "Solo redondeo por cantidad de decimales":
             st.caption(
-                f"Nota: 'Valores idénticos' considera las claves que hicieron match "
-                f"y cuyos valores resultaron iguales después de redondear ambos "
-                f"sistemas a {decimal_places} decimal(es)."
+                f"Nota: 'Valores idénticos' considera las claves que hicieron "
+                f"match y cuyos valores resultaron iguales después de redondear "
+                f"ambos sistemas a {decimal_places} decimal(es)."
+            )
+        elif comparison_method == "Solo tolerancia absoluta":
+            st.caption(
+                f"Nota: 'Valores idénticos' considera las claves que hicieron "
+                f"match y cuya diferencia absoluta original fue menor o igual "
+                f"a {tolerance:.6f}."
             )
         else:
             st.caption(
-                f"Nota: 'Valores idénticos' considera las claves que hicieron match "
-                f"y cuya diferencia absoluta fue menor o igual a {tolerance:.6f}."
+                f"Nota: 'Valores idénticos' considera las claves que hicieron "
+                f"match, cuyos valores fueron redondeados a {decimal_places} "
+                f"decimal(es) y cuya diferencia absoluta posterior fue menor "
+                f"o igual a {tolerance:.6f}."
             )
         excel_report = create_excel(results)
         st.download_button("📥 Descargar reporte comparativo Excel", data=excel_report, file_name="Reporte_Comparativo_SCI_Automatico.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
