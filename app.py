@@ -1,6 +1,7 @@
 import io
 import streamlit as st
 import pandas as pd
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 st.set_page_config(page_title="Certificación y Comparador SCI", layout="wide")
 st.title("📊 Certificación y Comparador SCI Automático")
@@ -77,33 +78,69 @@ def build_key(row):
     return "|".join(values)
 
 
-def to_number(value):
-    if pd.isna(value) or value == "":
+def to_decimal(value):
+    """Convierte un valor numérico con coma o punto a Decimal."""
+    if pd.isna(value) or str(value).strip() == "":
         return None
+
     try:
-        return float(str(value).replace(",", "."))
-    except Exception:
+        normalized = str(value).strip().replace(",", ".")
+        return Decimal(normalized)
+    except (InvalidOperation, ValueError, TypeError):
         return None
 
 
-def values_are_equal(value_1, value_2, tolerance):
-    num_1 = to_number(value_1)
-    num_2 = to_number(value_2)
-    if num_1 is None and num_2 is None:
+def round_decimal(value, decimal_places):
+    """Redondea usando ROUND_HALF_UP a la cantidad de decimales seleccionada."""
+    number = to_decimal(value)
+
+    if number is None:
+        return None
+
+    quantizer = (
+        Decimal("1")
+        if decimal_places == 0
+        else Decimal("1." + ("0" * decimal_places))
+    )
+
+    return number.quantize(quantizer, rounding=ROUND_HALF_UP)
+
+
+def values_are_equal(value_1, value_2, decimal_places):
+    """
+    Compara FoxPro y SCI 2.0 después de redondear ambos valores
+    a la cantidad de decimales seleccionada.
+    """
+    rounded_1 = round_decimal(value_1, decimal_places)
+    rounded_2 = round_decimal(value_2, decimal_places)
+
+    if rounded_1 is None and rounded_2 is None:
         return normalize_value(value_1) == normalize_value(value_2)
-    if num_1 is None or num_2 is None:
+
+    if rounded_1 is None or rounded_2 is None:
         return False
-    return abs(num_1 - num_2) <= tolerance
+
+    return rounded_1 == rounded_2
 
 
 def get_difference(value_1, value_2):
-    num_1 = to_number(value_1)
-    num_2 = to_number(value_2)
+    """Calcula la diferencia sobre los valores originales, sin redondear."""
+    num_1 = to_decimal(value_1)
+    num_2 = to_decimal(value_2)
+
     if num_1 is None or num_2 is None:
         return "N/A", "N/A"
+
     absolute_difference = abs(num_1 - num_2)
-    percentage_difference = "N/A" if num_1 == 0 else (absolute_difference / abs(num_1)) * 100
-    return absolute_difference, percentage_difference
+
+    if num_1 == 0:
+        percentage_difference = "N/A"
+    else:
+        percentage_difference = float(
+            (absolute_difference / abs(num_1)) * Decimal("100")
+        )
+
+    return float(absolute_difference), percentage_difference
 
 
 def create_excel(results):
@@ -278,7 +315,7 @@ def generar_validacion_2_0(df):
 # =========================================================
 # MODO COMPARAR SCI 1.0 VS SCI 2.0
 # =========================================================
-def compare_files(df1, df2, tolerance):
+def compare_files(df1, df2, decimal_places):
     columns_v1 = set(df1.columns)
     columns_v2 = set(df2.columns)
     structure = pd.DataFrame([
@@ -326,7 +363,7 @@ def compare_files(df1, df2, tolerance):
             original_value_1 = row.get(col1)
             original_value_2 = row.get(col2)
             compared_fields += 1
-            if values_are_equal(original_value_1, original_value_2, tolerance):
+            if values_are_equal(original_value_1, original_value_2, decimal_places):
                 equal_fields += 1
                 continue
             absolute_difference, percentage_difference = get_difference(original_value_1, original_value_2)
@@ -338,10 +375,17 @@ def compare_files(df1, df2, tolerance):
                 "CLAVE_COMPARACION": row["CLAVE_COMPARACION"],
                 "ID_INDICADOR": indicator,
                 "CAMPO": field,
-                "VALOR_SCI_1_0": original_value_1,
-                "VALOR_SCI_2_0": original_value_2,
-                "DIFERENCIA_ABSOLUTA": absolute_difference,
-                "DIFERENCIA_PORCENTUAL": percentage_difference,
+                "VALOR_FOXPRO_ORIGINAL": original_value_1,
+                "VALOR_SCI_2_0_ORIGINAL": original_value_2,
+                "VALOR_FOXPRO_REDONDEADO": str(
+                    round_decimal(original_value_1, decimal_places)
+                ),
+                "VALOR_SCI_2_0_REDONDEADO": str(
+                    round_decimal(original_value_2, decimal_places)
+                ),
+                "DECIMALES_CONSIDERADOS": decimal_places,
+                "DIFERENCIA_ABSOLUTA_ORIGINAL": absolute_difference,
+                "DIFERENCIA_PORCENTUAL_ORIGINAL": percentage_difference,
                 "ESTADO": "DIFERENCIA"
             })
 
@@ -414,7 +458,22 @@ def compare_files(df1, df2, tolerance):
         {"CATEGORIA": "Diferencia solo TAMANIO_DE_MUESTRA", "CANTIDAD": keys_with_only_sample_size_difference},
         {"CATEGORIA": "Diferencia en ambos campos", "CANTIDAD": keys_with_both_differences},
     ])
+    comparison_configuration = pd.DataFrame([
+        {
+            "PARAMETRO": "Cantidad de decimales considerados",
+            "VALOR": decimal_places
+        },
+        {
+            "PARAMETRO": "Criterio aplicado",
+            "VALOR": (
+                "FoxPro y SCI 2.0 se redondean antes de comparar. "
+                "Los valores redondeados deben ser exactamente iguales."
+            )
+        }
+    ])
+
     return {
+        "Configuracion_comparacion": comparison_configuration,
         "Resumen": summary,
         "Estructura": structure,
         "Conteo_ID_INDICADOR": count_by_indicator,
@@ -437,7 +496,17 @@ def compare_files(df1, df2, tolerance):
 with st.sidebar:
     st.header("Configuración")
     modo = st.radio("Modo de trabajo", ["Validar archivo SCI 2.0", "Comparar SCI 1.0 vs SCI 2.0"])
-    tolerance = st.number_input("Tolerancia decimal", min_value=0.0, value=0.0001, step=0.0001, format="%.6f")
+    decimal_places = st.number_input(
+        "Cantidad de decimales para comparar valores",
+        min_value=0,
+        max_value=10,
+        value=1,
+        step=1,
+        help=(
+            "En el punto 4, los valores de PROPORCION y TAMANIO_DE_MUESTRA "
+            "se redondean a esta cantidad de decimales antes de comparar."
+        )
+    )
 
 if modo == "Validar archivo SCI 2.0":
     st.header("✅ Validación individual archivo SCI 2.0")
@@ -500,10 +569,15 @@ elif modo == "Comparar SCI 1.0 vs SCI 2.0":
         with st.spinner("Procesando comparación..."):
             df1 = read_file(file_v1)
             df2 = read_file(file_v2)
-            results = compare_files(df1, df2, tolerance)
+            results = compare_files(df1, df2, decimal_places)
         summary = results["Resumen"]
         summary_dict = dict(zip(summary["VALIDACION"], summary["RESULTADO"]))
         st.success("Comparación ejecutada correctamente")
+        st.info(
+            f"**Criterio del punto 4:** PROPORCION y TAMANIO_DE_MUESTRA "
+            f"se compararon redondeando FoxPro y SCI 2.0 a "
+            f"**{decimal_places} decimal(es)**."
+        )
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Registros SCI 1.0", summary_dict["Total registros SCI 1.0"])
         col2.metric("Registros SCI 2.0", summary_dict["Total registros SCI 2.0"])
@@ -514,7 +588,11 @@ elif modo == "Comparar SCI 1.0 vs SCI 2.0":
         col6.metric("Solo SCI 1.0", summary_dict["Registros solo en SCI 1.0"])
         col7.metric("Solo SCI 2.0", summary_dict["Registros solo en SCI 2.0"])
         col8.metric("Filas duplicadas", summary_dict["Filas con clave duplicada SCI 1.0"] + summary_dict["Filas con clave duplicada SCI 2.0"])
-        st.caption("Nota: 'Valores idénticos' cuenta claves que hicieron match y cuyos valores comparados son iguales entre SCI 1.0 y SCI 2.0 según la tolerancia configurada.")
+        st.caption(
+            f"Nota: 'Valores idénticos' considera las claves que hicieron match "
+            f"y cuyos valores resultaron iguales después de redondear ambos "
+            f"sistemas a {decimal_places} decimal(es)."
+        )
         excel_report = create_excel(results)
         st.download_button("📥 Descargar reporte comparativo Excel", data=excel_report, file_name="Reporte_Comparativo_SCI_Automatico.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         tabs = st.tabs(["Resumen", "Estructura", "Conteo ID_INDICADOR", "Match por clave", "Resumen valores match", "Solo en un archivo", "Diferencias valores", "Duplicados / inválidos"])
