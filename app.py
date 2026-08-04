@@ -660,6 +660,8 @@ def compare_files(df1, df2, comparison_method, decimal_places, tolerance):
         "Configuracion_comparacion": comparison_configuration,
         "Resumen": summary,
         "Resumen_por_ID_INDICADOR": consolidated_by_indicator,
+        "Resumen_PROPORCION": build_summary_tables(consolidated_by_indicator)[0],
+        "Resumen_TAM_MUESTRA": build_summary_tables(consolidated_by_indicator)[1],
         "Estructura": structure,
         "Conteo_ID_INDICADOR": count_by_indicator,
         "Match_por_clave": matched,
@@ -677,6 +679,81 @@ def compare_files(df1, df2, comparison_method, decimal_places, tolerance):
 
 # =========================================================
 # INTERFAZ
+
+def format_percentage(value):
+    """Da formato de porcentaje con coma decimal."""
+    if value == "N/A" or pd.isna(value):
+        return "N/A"
+
+    return f"{float(value):.2f}%".replace(".", ",")
+
+
+def build_summary_tables(consolidated_df):
+    """
+    Separa el resumen consolidado en dos tablas:
+    1. PROPORCION
+    2. TAMANIO_DE_MUESTRA
+    """
+    detail_df = consolidated_df[
+        consolidated_df["ID_INDICADOR"].astype(str) != "TOTAL"
+    ].copy()
+
+    proportion_df = pd.DataFrame({
+        "ID_INDICADOR": detail_df["ID_INDICADOR"],
+        "Registros comparados": detail_df["REGISTROS_COMPARADOS"],
+        "Coincidencias": detail_df["PROPORCION_COINCIDENCIAS"],
+        "% Coincidencia": detail_df["PROPORCION_%_COINCIDENCIA"].apply(
+            format_percentage
+        ),
+        "Diferencias": detail_df["PROPORCION_DIFERENCIAS"],
+        "% Diferencia": detail_df["PROPORCION_%_DIFERENCIA"].apply(
+            format_percentage
+        ),
+    })
+
+    sample_source = detail_df[
+        detail_df["ID_INDICADOR"].isin([4, 5, 6])
+    ].copy()
+
+    sample_df = pd.DataFrame({
+        "ID_INDICADOR": sample_source["ID_INDICADOR"],
+        "Registros comparados": sample_source["REGISTROS_COMPARADOS"],
+        "Coincidencias": sample_source["TAMANIO_MUESTRA_COINCIDENCIAS"],
+        "% Coincidencia": sample_source[
+            "TAMANIO_MUESTRA_%_COINCIDENCIA"
+        ].apply(format_percentage),
+        "Diferencias": sample_source["TAMANIO_MUESTRA_DIFERENCIAS"],
+        "% Diferencia": sample_source[
+            "TAMANIO_MUESTRA_%_DIFERENCIA"
+        ].apply(format_percentage),
+    })
+
+    return proportion_df, sample_df
+
+
+def render_summary_tables(consolidated_df):
+    """
+    Muestra las tablas separadas como en el formato solicitado.
+    """
+    proportion_df, sample_df = build_summary_tables(consolidated_df)
+
+    st.markdown("### PROPORCIÓN")
+    st.dataframe(
+        proportion_df,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    st.markdown("### TAMAÑO_DE_MUESTRA")
+    st.dataframe(
+        sample_df,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
 # =========================================================
 with st.sidebar:
     st.header("Configuración")
@@ -889,14 +966,16 @@ elif modo == "Comparar SCI 1.0 vs SCI 2.0":
         with tabs[1]:
             st.subheader("Resumen consolidado por ID_INDICADOR")
             st.write(
-                "La tabla resume las coincidencias y diferencias de PROPORCION "
-                "y TAMANIO_DE_MUESTRA para las claves que hicieron match."
+                "Las siguientes tablas presentan, por indicador, los registros "
+                "comparados, las coincidencias, las diferencias y sus porcentajes "
+                "para las claves que hicieron match."
             )
-            safe_display(results["Resumen_por_ID_INDICADOR"])
+
+            render_summary_tables(results["Resumen_por_ID_INDICADOR"])
+
             st.caption(
-                "TAMANIO_DE_MUESTRA no aplica para los indicadores 3 y 7. "
-                "El total porcentual de este campo se calcula únicamente sobre "
-                "los indicadores 4, 5 y 6."
+                "TAMANIO_DE_MUESTRA solo aplica para los indicadores 4, 5 y 6. "
+                "Por esta razón, los indicadores 3 y 7 no se muestran en esa tabla."
             )
 
         with tabs[2]:
